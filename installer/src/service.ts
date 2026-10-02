@@ -1,6 +1,8 @@
 /*============================= services ===================================*/
-// systemd units (default) and pm2 for both apps. The daemon service is always
-// installed STOPPED: the user edits /etc/daemon/.env first (PRODUCT decision).
+// systemd units (default on Linux) and pm2 for both apps - on macOS pm2 is the
+// only option (services persist via pm2 startup's launchd agent). The daemon
+// service is always installed STOPPED: the user edits /etc/daemon/.env first
+// (PRODUCT decision).
 
 import { existsSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -9,6 +11,7 @@ import { tmpdir } from "node:os"
 import type { ServiceMgr } from "./plan"
 import { pushLog } from "./log"
 import { nodeBinDir, npmPriv, privCmd, privEnv, run, whichPath } from "./run"
+import { sys } from "./sys"
 
 export type App = "panel" | "daemon"
 
@@ -93,7 +96,12 @@ export async function installService(app: App, mgr: ServiceMgr, appDir: string):
     await privEnv(["pm2", "stop", name])
     await privEnv(["pm2", "save", "--force"])
     const nodeDir = await nodeBinDir()
-    if ((await privEnv(["pm2", "startup", "systemd", "-u", "root", "--hp", "/root"])) !== 0) {
+    if (sys.family === "darwin") {
+      // launchd: pm2 installs its own startup agent (no systemd flags here)
+      if ((await privEnv(["pm2", "startup"])) !== 0) {
+        pushLog("pm2 startup needs a manual run: sudo pm2 startup")
+      }
+    } else if ((await privEnv(["pm2", "startup", "systemd", "-u", "root", "--hp", "/root"])) !== 0) {
       pushLog(`pm2 startup needs a manual run: sudo env PATH=${nodeDir}:$PATH pm2 startup systemd -u root --hp /root`)
     }
     return "pm2 (stopped)"

@@ -16,6 +16,7 @@
  * with a one-line stderr notice - automation never has to die on a TTY guard.
  *============================================================================*/
 
+import "./src/flags" // first: runtime flags for UPX-packed binaries (see src/flags.ts)
 import {
   createCliRenderer,
   BoxRenderable,
@@ -254,16 +255,24 @@ async function runTui(): Promise<void> {
   r.root.add(welcome)
 
   /* ---- service screen (installs only, skipped by --service) ---- */
+  // macOS has no systemd - the screen offers pm2 only (parseArgs already
+  // rejects an explicit --service systemd there)
+  const macos = process.platform === "darwin"
   const svcSel = new SelectRenderable(r, {
     id: "service-sel",
     width: 56,
-    height: 6, // 3 options x 2 rows (name + description)
+    height: macos ? 4 : 6, // 2 or 3 options x 2 rows (name + description)
     flexShrink: 0,
-    options: [
-      { name: "systemd", description: "enable on boot, journalctl logs (recommended)" },
-      { name: "pm2", description: "pm2 save + startup" },
-      { name: "Back", description: "back to the menu" },
-    ],
+    options: macos
+      ? [
+          { name: "pm2", description: "pm2 save + startup" },
+          { name: "Back", description: "back to the menu" },
+        ]
+      : [
+          { name: "systemd", description: "enable on boot, journalctl logs (recommended)" },
+          { name: "pm2", description: "pm2 save + startup" },
+          { name: "Back", description: "back to the menu" },
+        ],
     backgroundColor: parseColor(C.panel),
     selectedBackgroundColor: parseColor(C.accent),
     selectedTextColor: parseColor(C.bg),
@@ -272,7 +281,9 @@ async function runTui(): Promise<void> {
   })
   const svcTitle = new TextRenderable(r, { content: "how should the airlink services run?", fg: parseColor(C.fg) })
   const svcHint = new TextRenderable(r, {
-    content: "systemd is the default · pm2 keeps apps stopped until you start them",
+    content: macos
+      ? "macOS has no systemd here - pm2 runs the services"
+      : "systemd is the default · pm2 keeps apps stopped until you start them",
     fg: parseColor(C.dim),
   })
   const service = new BoxRenderable(r, {

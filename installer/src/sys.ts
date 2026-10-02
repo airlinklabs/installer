@@ -1,13 +1,14 @@
 /*============================= system detect ==============================*/
 
+import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { pushLog } from "./log"
 import { capture, haveCmd, privCmd, quiet, run } from "./run"
 
-export type Family = "arch" | "debian" | "fedora" | "suse" | "unknown"
+export type Family = "arch" | "debian" | "fedora" | "suse" | "darwin" | "unknown"
 
 export const sys = {
-  name: "Linux",
+  name: process.platform === "darwin" ? "macOS" : "Linux",
   id: "",
   idLike: "",
   family: "unknown" as Family,
@@ -15,6 +16,15 @@ export const sys = {
 }
 
 export async function detectSystem(): Promise<void> {
+  if (process.platform === "darwin") {
+    // macOS has no os-release; sw_vers is the identity. AIRLINK_OS_RELEASE is
+    // the Linux test hook and does not apply here.
+    sys.id = "macos"
+    sys.family = "darwin"
+    const v = (await capture(["sw_vers", "-productVersion"]))?.trim()
+    sys.name = `macOS${v ? ` ${v}` : ""}`
+    return
+  }
   // AIRLINK_OS_RELEASE is a test hook (e2e drives unsupported-distro detection)
   const src = process.env.AIRLINK_OS_RELEASE || "/etc/os-release"
   try {
@@ -40,6 +50,16 @@ export async function detectSystem(): Promise<void> {
 
 /*============================= package sets ===============================*/
 
+/** brew as argv prefix. Homebrew refuses to run as root, so when the shipped
+ *  (root) binary must install something we drop to the sudo-invoking user;
+ *  the two known prefixes beat PATH lookups because sudo may reset it. */
+function brewBase(): string[] {
+  const brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].find((c) => existsSync(c)) ?? "brew"
+  const uid = process.getuid?.() ?? 0
+  const user = process.env.SUDO_USER
+  return uid === 0 && user ? ["sudo", "-u", user, brew] : [brew]
+}
+
 export function pkgInstallCmd(pkgs: string[]): string[] {
   switch (sys.family) {
     case "arch":
@@ -50,6 +70,8 @@ export function pkgInstallCmd(pkgs: string[]): string[] {
       return privCmd(["dnf", "install", "-y", ...pkgs])
     case "suse":
       return privCmd(["zypper", "--non-interactive", "install", ...pkgs])
+    case "darwin":
+      return [...brewBase(), "install", ...pkgs]
     default:
       return ["false"]
   }
@@ -71,7 +93,7 @@ export async function refreshIndex(): Promise<void> {
       await run(privCmd(["zypper", "refresh"]))
       break
     default:
-      break // dnf refreshes lazily
+      break // dnf refreshes lazily, brew has no index to refresh
   }
 }
 
@@ -107,7 +129,8 @@ async function nodeMajor(): Promise<number> {
   return m ? parseInt(m[1], 10) : 0
 }
 
-/** node >= 18 (with npm): NodeSource 20 on debian/fedora, distro packages elsewhere */
+/** node >= 18 (with npm): NodeSource 20 on debian/fedora, distro packages
+ *  elsewhere, Homebrew's `node` on macOS */
 export async function ensureNode(): Promise<void> {
   const major = await nodeMajor()
   if (major >= 18) {
@@ -130,6 +153,11 @@ export async function ensureNode(): Promise<void> {
     case "suse":
       await installPkgs(["nodejs", "npm"])
       break
+    case "darwin":
+      if ((await run([...brewBase(), "install", "node"])) !== 0) {
+        pushLog("brew install node failed - install node >= 18 (brew or nvm) yourself if this keeps failing")
+      }
+      break
     default:
       throw new Error("cannot install node on an unknown distro - install node >= 18 yourself and re-run")
   }
@@ -141,11 +169,13 @@ export async function ensureNode(): Promise<void> {
 }
 
 // toolchain: bcrypt/prisma fallbacks on panel, required by the daemon libs/ addon
+// (macOS: the Xcode Command Line Tools cover this - verified in ensureRuntimeDeps)
 const TOOLCHAIN: Record<Family, string[]> = {
   arch: ["base-devel", "python"],
   debian: ["build-essential", "python3"],
   fedora: ["gcc-c++", "make", "python3"],
   suse: ["gcc-c++", "make", "python3"],
+  darwin: [],
   unknown: [],
 }
 
@@ -153,6 +183,18 @@ const TOOLCHAIN: Record<Family, string[]> = {
 export async function ensureRuntimeDeps(): Promise<void> {
   if (sys.family === "unknown") {
     throw new Error(`unsupported distro (ID=${sys.id || "?"}) - Debian/Ubuntu, RHEL/Fedora, Arch and openSUSE are supported`)
+  }
+  if (sys.family === "darwin") {
+    // CLT first: without it make/g++/python3 are xcode-select shims that only
+    // print an install prompt. Homebrew is needed only when node is missing.
+    if ((await quiet(["xcode-select", "-p"])) !== 0) {
+      throw new Error("Xcode Command Line Tools are required - run `xcode-select --install`, wait, then re-run")
+    }
+    await ensureNode()
+    if (!(await haveCmd("curl"))) throw new Error("curl is missing - install it with Homebrew and re-run")
+    if (!(await haveCmd("unzip"))) throw new Error("unzip is missing - install it with Homebrew and re-run")
+    pushLog("runtime deps ok (macOS: CLT + node)")
+    return
   }
   const need = new Set<string>()
   if (!(await haveCmd("curl"))) need.add("curl")
@@ -172,8 +214,25 @@ export async function ensureRuntimeDeps(): Promise<void> {
 }
 
 /** Docker for the daemon: present + active, else install (get.docker.com on
- *  debian/fedora, distro packages on arch/suse; tolerant when systemd is absent) */
+ *  debian/fedora, distro packages on arch/suse, Docker Desktop cask on macOS;
+ *  tolerant when systemd is absent) */
 export async function ensureDocker(): Promise<void> {
+  if (sys.family === "darwin") {
+    // macOS: no auto-start of engines - the CLI must exist AND an engine must
+    // be running (Docker Desktop app or colima) before the daemon can work
+    if (!(await haveCmd("docker"))) {
+      pushLog("installing Docker Desktop (brew cask)")
+      await run([...brewBase(), "install", "--cask", "docker"]) // best effort; verified below
+    }
+    if (!(await haveCmd("docker"))) {
+      throw new Error("docker is missing - install Docker Desktop (brew install --cask docker) or colima, start it, and re-run")
+    }
+    if ((await quiet(["docker", "info"])) !== 0) {
+      throw new Error("docker is installed but not running - start Docker Desktop (or: colima start) and re-run")
+    }
+    pushLog("docker running")
+    return
+  }
   if (await haveCmd("docker")) {
     if (await haveCmd("systemctl")) {
       if ((await quiet(["systemctl", "is-active", "--quiet", "docker"])) === 0) {
@@ -215,8 +274,10 @@ export async function ensureDocker(): Promise<void> {
 }
 
 /** ownership hygiene: services run as root, but the panel READMEs expect
- *  a www-data user to exist - tolerant if useradd is unavailable */
+ *  a www-data user to exist - tolerant if useradd is unavailable (macOS has
+ *  no www-data and services run as root, so there is nothing to create) */
 export async function ensureWwwData(): Promise<void> {
+  if (sys.family === "darwin") return
   if ((await quiet(["id", "www-data"])) === 0) return
   const c = await run(privCmd(["useradd", "-r", "-M", "-s", "/usr/sbin/nologin", "www-data"]))
   if (c !== 0) pushLog("could not create www-data - services run as root, this was ownership hygiene only")

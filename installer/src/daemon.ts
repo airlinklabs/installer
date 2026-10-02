@@ -13,6 +13,7 @@ import { pushLog } from "./log"
 import { downloadAsset, fetchLatestRelease, stageAndSwap, type ReleaseInfo } from "./release"
 import { npmPriv, privCmd, privEnv, run } from "./run"
 import { installService, removeService } from "./service"
+import { sys } from "./sys"
 
 const daemonDir = () => process.env.AIRLINK_DAEMON_DIR || "/etc/daemon"
 
@@ -68,11 +69,13 @@ export function daemonInstallSteps(cfg: Cfg): Step[] {
       name: "daemon · set permissions",
       state: "pending",
       run: async () => {
-        if ((await run(privCmd(["chown", "-R", "www-data:www-data", dir]))) !== 0) {
-          throw new Error(`failed to chown ${dir} to www-data - check permissions`)
+        // macOS has no www-data; services run as root there, so root:wheel
+        const owner = sys.family === "darwin" ? "root:wheel" : "www-data:www-data"
+        if ((await run(privCmd(["chown", "-R", owner, dir]))) !== 0) {
+          throw new Error(`failed to chown ${dir} to ${owner} - check permissions`)
         }
         if ((await run(privCmd(["chmod", "-R", "755", dir]))) !== 0) throw new Error(`failed to chmod ${dir}`)
-        return { note: "www-data" }
+        return { note: sys.family === "darwin" ? "root:wheel" : "www-data" }
       },
     },
     {
@@ -99,7 +102,11 @@ export function daemonInstallSteps(cfg: Cfg): Step[] {
         if ((await privEnv(["npm", "rebuild"], libs)) !== 0) throw new Error(`npm rebuild failed in ${libs} - see logs above`)
         const release = join(libs, "build", "Release")
         if (!existsSync(join(release, "rename_at.node")) || !existsSync(join(release, "secure_open.node"))) {
-          throw new Error("native addon not built - install build-essential (make, g++, python3) and re-run")
+          throw new Error(
+            sys.family === "darwin"
+              ? "native addon not built - install the Xcode Command Line Tools (xcode-select --install) and re-run"
+              : "native addon not built - install build-essential (make, g++, python3) and re-run",
+          )
         }
         return { note: "rename_at + secure_open" }
       },

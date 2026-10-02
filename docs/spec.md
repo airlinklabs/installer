@@ -9,7 +9,7 @@ installer.sh                      # bash bootstrap: downloads the prebuilt binar
 README.md                         # one-liner usage, flags, uninstall, dev docs
 PRODUCT.md
 docs/spec.md                      # this file
-.github/workflows/build.yml       # bun build --compile matrix -> rolling release `latest-build`
+.github/workflows/build.yml       # bun build --compile matrix + UPX pack -> rolling release `latest-build`
 .github/workflows/pages.yml       # publish installer.sh (+ index) to GitHub Pages
 installer/
   package.json  tsconfig.json  bun.lock
@@ -35,16 +35,16 @@ Runtime: **bun** runs TS directly for development (no bundler). Distribution: CI
 
 Distribution is a **prebuilt single-file binary**, not a source checkout: CI runs `bun build --compile` per platform and publishes the binaries on a rolling GitHub release; the bootstrap only downloads the right one and runs it. No git, no bun, no node_modules on the target machine. (Verified: a compiled OpenTUI binary renders correctly — `bun build --compile --target=bun-linux-arm64` embeds `libopentui.so` and runs standalone.)
 
-- Download base: `DOWNLOAD_BASE="${AIRLINK_INSTALLER_DL:-https://github.com/airlinklabs/installer/releases/download/latest-build}"` → asset `$DOWNLOAD_BASE/airlink-installer-<platform>`.
-- Asset names: `airlink-installer-linux-x64`, `airlink-installer-linux-arm64` (glibc targets only — `bun-linux-<arch>`; musl/Alpine is refused at detect time, see behavior step 2).
+- Download base: `DOWNLOAD_BASE="${AIRLINK_INSTALLER_DL:-https://github.com/airlinklabs/installer/releases/download/latest-build}"` → asset `$DOWNLOAD_BASE/airlink-installer-<os>-<arch>`.
+- Asset names: `airlink-installer-linux-x64`, `airlink-installer-linux-arm64` (glibc targets — `bun-linux-<arch>`; musl/Alpine is refused at detect time, see behavior step 2), `airlink-installer-darwin-arm64`, `airlink-installer-darwin-x64`. The plain asset is the UPX-packed binary (~27 MB; raw is ~97 MB); if the packer refuses a target or the packed smoke test fails, CI ships `<asset>.gz` instead (raw bytes) and the bootstrap falls back to it automatically. Packed binaries re-exec themselves once with `BUN_FEATURE_FLAG_DISABLE_STANDALONE_MADVISE=1` (bun's MADV_DONTNEED hint zero-fills UPX'd anonymous pages, `oven-sh/bun#42515`) — see `installer/src/flags.ts`.
 - Piped one-liner: `curl -fsSL https://airlinklabs.xyz/install | bash` (README also documents the raw.githubusercontent fallback and `bash -s -- <flags>`).
 
 Behavior (structure/comments follow the reference `Miserable_Xfce/init.sh`):
 1. Pre-parse flags: `--no-color` (plain), `--help|-h` (no TTY, no root), `--demo` (no root), detect presence of any `--install-*`/`--uninstall-*` action flag. Everything is forwarded verbatim to the binary.
-2. Platform detect: Linux only (else die naming the OS); arch `x86_64→x64`, `aarch64→arm64` (else die); musl (`ldd --version 2>&1 | grep -qi musl`) dies with an explicit "not supported" message (service management targets systemd distros). Unknown combos die with the supported list.
+2. Platform detect: Linux (`x86_64→x64`, `aarch64→arm64`) or macOS/Darwin (same arch mapping); anything else dies naming the OS. On Linux, musl (`ldd --version 2>&1 | grep -qi musl`) dies with an explicit "not supported" message (service management targets systemd distros). Unknown combos die with the supported list. `SELF_NAME=airlink-installer-<os_lc>-<arch>` is derived here.
 3. TTY guard (reference logic): TUI needs a TTY; piped stdin + openable `/dev/tty` + TTY stdout → `tty_in="</dev/tty"` so bash keeps reading the script from the pipe while the binary reads the terminal; **no TTY anywhere → warn and continue** — the binary auto-falls back to plain logs (a one-line stderr notice unless `--no-color` was explicit), so scripts never die on a TTY guard. `action + --yes` is the fully scripted path: plain, silent, no TUI even on a TTY (the TUI's end-of-run keypress would hang automation).
 4. Root: needed unless `--help`, `--demo`, or plain-without-action (usage path). Non-root → `command -v sudo` check; with an openable `/dev/tty`: `sudo -v` once (interactive prompt); **without a TTY**: `sudo -n true` preflight (passwordless only — die with a clear message otherwise, never hang a script). Then the binary runs under `sudo` — it is root, so no keepalive is needed and the TS side's `privCmd` short-circuits to direct execution. Local dev (`bun installer.ts` as a normal user) still uses the `sudo -n` path.
-5. Download: `curl -fL --retry 3 --connect-timeout 10` (wget fallback; neither → die) into `mktemp -d` with an EXIT trap for cleanup; 404 → die naming the platform asset and pointing at the repo's Actions tab. If `<asset>.sha256` downloads and `sha256sum` exists → verify, mismatch dies (absence never fatal).
+5. Download: `curl -fL --retry 3 --connect-timeout 10` (wget fallback; neither → die) into `mktemp -d` with an EXIT trap for cleanup; the plain asset first, `<asset>.gz` fallback (decompressed with `gzip -dc`), both verified against the same sidecar rule: if `<fetched>.sha256` downloads and `sha256sum` exists → verify **the fetched bytes** (before decompressing), mismatch dies (absence never fatal). 404 on every candidate → die naming the platform asset and pointing at the repo's Actions tab.
 6. Run: `"${SUDO[@]}" "$BIN" "$@"` (`</dev/tty` when piped), capture exit code, cleanup tmp, propagate rc.
 
 ## 3. CLI surface (`config.ts`)
@@ -53,7 +53,9 @@ Behavior (structure/comments follow the reference `Miserable_Xfce/init.sh`):
 flags (both TUI and plain):
   --install-both | --install-panel | --install-daemon
   --uninstall-panel | --uninstall-daemon | --uninstall-all
-  --service systemd|pm2        default: systemd
+  --service systemd|pm2        default: systemd (pm2 on macOS, which has no
+                               systemd - explicit --service systemd there is
+                               a usage error; skips the service screen)
   --yes                        skip the confirm screens; with an action
                                flag = scripted run (plain, no TUI, exits alone)
   --no-color                   plain runner explicitly (no TUI, no TTY needed)
@@ -110,13 +112,14 @@ Never extract the zip directly over a live target: stale files from a previous r
 
 ## 7. Dependencies (`sys.ts`)
 
-Distro families: `arch | debian | fedora | suse | unknown` (parse `/etc/os-release`, `AIRLINK_OS_RELEASE` test hook; `unknown` → step failure with a clear message).
+Distro families: `arch | debian | fedora | suse | unknown` (parse `/etc/os-release`, `AIRLINK_OS_RELEASE` test hook; `unknown` → step failure with a clear message). macOS has no os-release: the family is `darwin`, detected via `sw_vers`, and every package command goes through Homebrew (`brewBase()` — `brew` refuses root, so the command drops back to `SUDO_USER` for installation).
 
 - **runtime deps (panel & daemon):** `curl`, `unzip`, `git` (bootstrap only, not here), `openssl` not required (randomness comes from bun's `crypto`), Node ≥ 18 + npm.
-  - Node missing or major < 18 → NodeSource `setup_20.x` (debian/redhat), `pacman -S --needed --noconfirm nodejs npm` (arch), `zypper --non-interactive install nodejs npm` (suse). Then re-verify major ≥ 18 or fail.
-- **build toolchain (both — bcrypt/prisma fallbacks, required by daemon addon):** debian `build-essential python3`, arch `base-devel python`, fedora `gcc-c++ make python3`, suse `gcc-c++ make python3`.
-- **daemon extras:** Docker present + `systemctl is-active docker` (install `get.docker.com` on debian/redhat, `pacman -S docker`, `zypper install docker`; `enable --now docker`; tolerant if systemd unavailable — warn).
-- **www-data:** `id www-data` else `useradd -r -M -s /usr/sbin/nologin www-data` (tolerant warn; services run as root so this is ownership hygiene per the READMEs).
+  - Node missing or major < 18 → NodeSource `setup_20.x` (debian/redhat), `pacman -S --needed --noconfirm nodejs npm` (arch), `zypper --non-interactive install nodejs npm` (suse), `brew install node` (darwin). Then re-verify major ≥ 18 or fail.
+  - macOS also checks the Xcode Command Line Tools (`xcode-select -p`, with the `xcode-select --install` hint when missing).
+- **build toolchain (both — bcrypt/prisma fallbacks, required by daemon addon):** debian `build-essential python3`, arch `base-devel python`, fedora `gcc-c++ make python3`, suse `gcc-c++ make python3`. macOS: none (`TOOLCHAIN.darwin = []` — the CLT provides the compiler).
+- **daemon extras:** Docker present + `systemctl is-active docker` (install `get.docker.com` on debian/redhat, `pacman -S docker`, `zypper install docker`; `enable --now docker`; tolerant if systemd unavailable — warn). macOS: `brew install --cask docker` when missing, then `docker info` must succeed (Docker Desktop installed but not running → clear error, not a hang).
+- **www-data:** `id www-data` else `useradd -r -M -s /usr/sbin/nologin www-data` (tolerant warn; services run as root so this is ownership hygiene per the READMEs). Skipped on macOS (no such account; ownership uses `root:wheel`).
 - Batch install first, package-by-package retry on failure (reference pattern); `DEBIAN_FRONTEND=noninteractive`; arch uses `-Syu` never `-Sy`.
 
 ## 8. Privileged execution (`run.ts`)
@@ -132,13 +135,13 @@ Distro families: `arch | debian | fedora | suse | unknown` (parse `/etc/os-relea
 
 | # | panel step | daemon step |
 |---|---|---|
-| 1 | detect system (family, sudo credential `sudo -n true`, www-data ensure) | same + docker ensure |
-| 2 | runtime deps (node≥18, npm, curl, unzip, toolchain) | same |
+| 1 | detect system (family — `sw_vers` on macOS, sudo credential `sudo -n true`, www-data ensure — skipped on macOS) | same + docker ensure |
+| 2 | runtime deps (node≥18, npm, curl, unzip, toolchain; macOS: CLT check + brew installs) | same |
 | 3 | resolve latest release → note `<tag>` | same |
 | 4 | download `panel.zip` (+ digest verify) → note `sha256 ok`/`unverified` | download `daemon.zip` |
 | 5 | extract to `AIRLINK_PANEL_DIR` (strip root, preserve `.env`) | extract to `AIRLINK_DAEMON_DIR` |
 | 6 | write `.env` — fresh: `example.env` with `SESSION_SECRET` replaced by 32-hex random; existing `.env` restored untouched (note `fresh`/`preserved`) | write `.env` — **verbatim copy of `example.env`** when fresh; existing restored untouched (note `fresh`/`preserved`) |
-| 7 | set permissions: `chown -R www-data:www-data`, `chmod -R 755` | same |
+| 7 | set permissions: `chown -R www-data:www-data`, `chmod -R 755` (macOS: `chown -R root:wheel`) | same |
 | 8 | `npm install` (dev deps kept — `npm run build` needs `tsc`) | `npm install` |
 | 9 | database: `npx prisma generate` + `npx prisma db push --skip-generate` | — |
 | 10 | build: `npm run build` | build: `npm run build` (tsc → `dist/`) |
@@ -173,7 +176,7 @@ pm2:
 - `npmPriv(["install", "-g", "pm2"])` when missing.
 - panel: `pm2 start <dir>/dist/app.js --name airlink-panel --cwd <dir>` (started), `pm2 save`.
 - daemon: `pm2 start <dir>/dist/app.js --name airlink-daemon --cwd <dir>` then `pm2 stop airlink-daemon`, `pm2 save` (stays stopped, matching the systemd behavior).
-- `pm2 startup systemd -u root --hp /root` via sudo — tolerant: on failure log the manual instruction.
+- `pm2 startup systemd -u root --hp /root` via sudo on Linux; on macOS plain `pm2 startup` (launchd agent — no systemd flags) — tolerant: on failure log the manual instruction.
 - pm2 commands run through `privCmd` so the root pm2 daemon owns the apps (matches `User=root`).
 
 ## 11. TUI (`installer.ts`) — the built surface
@@ -188,7 +191,7 @@ Screens:
    - `Uninstall panel` / `Uninstall daemon` / `Uninstall everything` (desc `requires confirmation`)
    - `Exit` / `quit without changes`
    - hint line: `up/down move · enter select · install makes changes only after you confirm`
-2. **service screen** (install actions only) — select: `systemd — enable on boot, journalctl logs (recommended)` / `pm2 — pm2 save + startup` / `Back`. Preselect systemd. Choosing proceeds to the **confirm screen**. Action flags (`--service`) skip this screen.
+2. **service screen** (install actions only) — select: `systemd — enable on boot, journalctl logs (recommended)` / `pm2 — pm2 save + startup` / `Back`. Preselect systemd. Choosing proceeds to the **confirm screen**. Action flags (`--service`) skip this screen. On macOS the screen is pm2-only (pm2 preselected, no systemd entry, shorter height) because systemd does not exist there.
 3. **confirm screen** (every action unless `--yes` — installs stop here too, fulfilling the welcome hint "install makes changes only after you confirm"; Cancel preselected first):
    - **install**: title `installs with <mgr>:`; per app the service line (`airlink-panel.service  enable + start` for systemd / `airlink-panel (pm2)  start + pm2 save`; daemon variant notes it starts only after the `.env` edit), `unit` path (systemd only), `files <dir>`; footer `node, docker + build tools install only if missing`; select `Cancel` / `Yes, install`.
    - **uninstall**: title `this removes services and files:`; the manager per app is auto-detected before the box renders (systemd → unit path — honors `AIRLINK_UNIT_DIR`; pm2 → process copy, no unit lines; none → `(no service - files still removed)`, truthful because `rm -rf` runs unconditionally), footer `kept: node, docker, pm2`; select `Cancel` (default, first) / `Yes, remove <x>` with description `stops services and deletes files`, or `no service - removes leftover files only` when no target app has a service.
@@ -211,12 +214,12 @@ Uninstall: what was removed; what was kept (node/docker/pm2).
 ## 13. Tests & gates
 
 - `bunx tsc --noEmit` — clean, strict.
-- `installer/*.test.ts` (bun:test): release JSON → tag/asset/url resolution + prerelease rejection + fallback URL derivation; `.env` writers (fresh vs preserved, SESSION_SECRET replaced, verbatim daemon mode); strip-root detection from file lists; `parseArgs` matrix (all flags, bad `--service`, plain-without-action, uninstall-without-`--yes`); plan assembly (dedup by name, step order per §9); summary lines from step notes.
-- `installer/e2e.sh` — hermetic: throwaway `$HOME`, PATH stubs for `sudo`/package managers/`systemctl`/`useradd`/`chown`, `AIRLINK_*_DIR` + `AIRLINK_OS_RELEASE` + `AIRLINK_*_URL` overrides; scenarios: `--help` exit 0; `--no-color --demo --install-panel` exit 0 with `✓` lines and zero system changes; **auto-fallback:** `--demo --install-panel` without `--no-color` on a redirected stdout exits 0 with the `no TTY` notice; `--demo --install-both --yes` exits 0 **without** the notice (scripted path stays silent); `--no-color --uninstall-panel` without `--yes` exits 2; plain-without-action exits 2; bootstrap smoke: a fixture dir served as `file://` via `AIRLINK_INSTALLER_DL` → `installer.sh` detects platform, "downloads" the stub binary, execs it with flags verbatim (including a no-`--no-color` auto-fallback run), propagates rc, dies (rc 1) on sha256 mismatch. TUI screens are exercised by `--demo` runs locally, not in CI.
+- `installer/*.test.ts` (bun:test): release JSON → tag/asset/url resolution + prerelease rejection + fallback URL derivation; `.env` writers (fresh vs preserved, SESSION_SECRET replaced, verbatim daemon mode); strip-root detection from file lists; `parseArgs` matrix (all flags, bad `--service`, plain-without-action, uninstall-without-`--yes`) — platform-aware: darwin defaults to pm2 and an explicit `--service systemd` there is a usage error; plan assembly (dedup by name, step order per §9) including the pm2-unreachable note path; summary lines from step notes; `sys.test.ts` (os-release/family parsing, package-command and brew maps, darwin detect rules); `flags.test.ts` (UPX magic probe: head/tail windows, fail-safe "packed" on read errors).
+- `installer/e2e.sh` — hermetic: throwaway `$HOME`, PATH stubs for `sudo`/package managers/`systemctl`/`useradd`/`chown`, `AIRLINK_*_DIR` + `AIRLINK_OS_RELEASE` + `AIRLINK_*_URL` overrides; scenarios: `--help` exit 0; `--no-color --demo --install-panel` exit 0 with `✓` lines and zero system changes; **auto-fallback:** `--demo --install-panel` without `--no-color` on a redirected stdout exits 0 with the `no TTY` notice; `--demo --install-both --yes` exits 0 **without** the notice (scripted path stays silent); `--no-color --uninstall-panel` without `--yes` exits 2; plain-without-action exits 2; bootstrap smoke: a fixture dir served as `file://` via `AIRLINK_INSTALLER_DL` → `installer.sh` detects platform, "downloads" the stub binary, execs it with flags verbatim (including a no-`--no-color` auto-fallback run), propagates rc, dies (rc 1) on sha256 mismatch, and the `.gz` fallback path (only `<asset>.gz` served → bootstrap decompresses it and the stub runs; sidecar verified over the fetched gz bytes). TUI screens are exercised by `--demo` runs locally, not in CI.
 - Everything runs as the invoking user with `sudo -n` (the e2e stubs `sudo`).
 
 ## 14. Release automation + README
 
-- `.github/workflows/build.yml` (binary distribution): on push to `main` (paths `installer/**`) + `workflow_dispatch`. Matrix: `ubuntu-24.04` (x64) and `ubuntu-24.04-arm` (arm64) — native runners so each target arch has its `@opentui/core-<arch>` native package on disk for embedding. Steps: checkout → `oven-sh/setup-bun` (pin 1.4.x) → `bun install --frozen-lockfile` → typecheck + `bun test` → `bun build --compile --minify --target=bun-linux-<arch> installer.ts --outfile dist/airlink-installer-linux-<arch>` + `sha256sum` sidecar → `--help`/`--demo` smoke test → upload artifacts. (glibc-only: no `-musl` targets.) A `publish` job (main only) creates the rolling release `latest-build` (`--prerelease`, so it never hijacks `releases/latest` for future version tags) via `gh release create` if absent, then `gh release upload ... --clobber` both platforms' assets. Permissions: `contents: write` on publish.
+- `.github/workflows/build.yml` (binary distribution): on push to `main` (paths `installer/**`) + `workflow_dispatch`. 4-way matrix of native runners so each target arch has its `@opentui/core-<arch>` native package on disk for embedding: `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (arm64), `macos-15` (arm64), `macos-15-intel` (x64). Steps: checkout → `oven-sh/setup-bun` (pin 1.4) → `bun install --frozen-lockfile` → typecheck + `bun test` (linux rows; the tests are platform-aware and assert the darwin rules from linux) → `bun build --compile --minify --target=<os>-<arch>` → UPX pack (linux: pinned 5.2.1 tarball; macOS: `brew install upx`, tolerated failure → `.gz` fallback; lzma then NRV codec attempts) to the side, keeping the raw original → codesign (darwin) → smoke the packed artifact (`--help` + `--no-color --demo --install-panel`, no TTY, no root — exercises the `src/flags.ts` re-exec) → packed smoke failed → revert to raw, smoke it, ship `gzip -9 -n` as `<name>.gz` and delete the raw → `sha256sum`/`shasum -a 256` sidecar **over the final shipped bytes** → upload artifacts. A `publish` job (main only) creates the rolling release `latest-build` if absent with `--latest=false` (**not** `--prerelease` — this repo's releases are ordinary releases; `--latest=false` is what keeps `releases/latest` free for future version tags), `gh release upload ... --clobber`, then prunes any release asset this run did not produce (targets can flip between the packed and `.gz` forms across bun/UPX changes). Permissions: `contents: write` on publish.
 - `.github/workflows/pages.yml`: on push to `main`, build a `_site` containing `installer.sh` at the artifact root plus a minimal `index.html` (dark `#1a1b26`, accent `#7aa2f7`, the curl one-liner), deploy via `actions/deploy-pages`. README tells the maintainer to set repo Pages source to "GitHub Actions" once. Binaries are NOT on Pages — only on the release.
-- README: the one-liner (`curl -fsSL https://airlinklabs.xyz/install | bash`), raw fallback, flags table, what each action does, uninstall, how distribution works (bootstrap downloads ~100 MB binary for your platform from the `latest-build` release and runs it as root; checksummed), dev (`cd installer && bun install && bun installer.ts --demo`), requirements (Linux x64/arm64 glibc — musl/Alpine refused by the bootstrap, sudo — passwordless when non-interactive, TTY optional: no TTY falls back to plain logs), env overrides table.
+- README: the one-liner (`curl -fsSL https://airlinklabs.xyz/install | bash`), raw fallback, flags table, what each action does, uninstall, how distribution works (bootstrap downloads the ~27 MB UPX-packed binary for your platform from the `latest-build` release — `.gz` fallback when the packer couldn't pack it — and runs it as root; checksummed), dev (`cd installer && bun install && bun installer.ts --demo`), requirements (Linux x64/arm64 glibc — musl/Alpine refused by the bootstrap — and macOS arm64/x64 with CLT + Homebrew; sudo — passwordless when non-interactive; TTY optional: no TTY falls back to plain logs), env overrides table.

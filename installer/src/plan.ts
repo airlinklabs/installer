@@ -112,7 +112,10 @@ function demoNoteFor(name: string, cfg?: Cfg): string | undefined {
   const dir = isPanel
     ? process.env.AIRLINK_PANEL_DIR || "/var/www/panel"
     : process.env.AIRLINK_DAEMON_DIR || "/etc/daemon"
-  if (name === "detect system") return `${sys.id || "linux"} ${sys.family === "unknown" ? "debian" : sys.family}`
+  if (name === "detect system") {
+    const id = sys.id || (process.platform === "darwin" ? "macos" : "linux")
+    return `${id} ${sys.family === "unknown" ? "debian" : sys.family}`
+  }
   if (name === "runtime deps") return "node, curl, unzip"
   if (name === "docker") return "docker ok"
   if (name.endsWith("resolve latest release")) return "Beta-demo"
@@ -120,7 +123,7 @@ function demoNoteFor(name: string, cfg?: Cfg): string | undefined {
   if (name.endsWith("extract")) return "fresh install"
   if (name === "panel · write .env") return "fresh"
   if (name === "daemon · write .env") return "fresh (example defaults)"
-  if (name.endsWith("set permissions")) return "www-data"
+  if (name.endsWith("set permissions")) return sys.family === "darwin" ? "root:wheel" : "www-data"
   if (name === "panel · database setup") return "sqlite ok"
   if (name === "daemon · build") return "dist/"
   if (name.endsWith("native addon (libs)")) return "rename_at + secure_open"
@@ -169,15 +172,16 @@ export function summaryLines(steps: Step[]): string[] {
     if (envNote === "preserved") out.push("panel .env: preserved")
     else if (envNote === "fresh") out.push("panel .env: fresh (SESSION_SECRET generated)")
     const health = noteOf("panel · health check")
+    const svc = noteOf("panel · install service")
     let panelUrl = ""
     const okPort = health?.match(/^ok :(\d+)$/)
     if (okPort) {
       panelUrl = `http://${firstIp()}:${okPort[1]}`
       out.push(`panel: ${panelUrl}`)
     } else if (health === "unreachable") {
-      out.push("panel health: not answering yet - journalctl -u airlink-panel -f")
+      const where = svc === "pm2" ? "pm2 logs airlink-panel" : "journalctl -u airlink-panel -f"
+      out.push(`panel health: not answering yet - ${where}`)
     }
-    const svc = noteOf("panel · install service")
     if (svc === "systemd" || svc === "pm2") {
       out.push(svc === "systemd" ? "panel service: systemctl status airlink-panel" : "panel service: pm2 logs airlink-panel")
       out.push(`register: open ${panelUrl || "the panel URL"} and sign up - the first signup becomes the admin`)

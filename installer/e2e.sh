@@ -143,4 +143,22 @@ run 1 "bootstrap: checksum mismatch dies" -- bash "$BOOTSTRAP" --no-color --help
 grep -qi "mismatch" "$TMP/out.log" || fail "mismatch death lacks message"
 pass "bootstrap reports checksum mismatch"
 
+# .gz fallback: when a packer target refuses, CI ships only `${ASSET}.gz` -
+# the bootstrap must fetch it, verify the sidecar over the compressed bytes,
+# decompress, and run the binary
+rm -f "$TMP/fixtures/$ASSET" "$TMP/fixtures/$ASSET.sha256"
+cat > "$TMP/stub.sh" <<'EOF'
+#!/usr/bin/env bash
+# stand-in for the compiled installer: echoes argv, exits with $STUB_RC
+echo "stub args: $*"
+exit "${STUB_RC:-0}"
+EOF
+gzip -9 -n -c "$TMP/stub.sh" > "$TMP/fixtures/$ASSET.gz"
+(cd "$TMP/fixtures" && sha256sum "$ASSET.gz" > "$ASSET.gz.sha256")
+run 0 "bootstrap: .gz fallback asset" -- bash "$BOOTSTRAP" --no-color --help
+grep -q "trying ${ASSET}.gz" "$TMP/out.log" || { cat "$TMP/out.log"; fail "gz fallback never attempted"; }
+grep -q "checksum ok" "$TMP/out.log" || fail "gz sidecar not verified"
+grep -q "stub args: --no-color --help" "$TMP/out.log" || fail "gz fallback did not run the decompressed stub"
+pass "bootstrap falls back to the .gz asset"
+
 echo "e2e: all scenarios passed"

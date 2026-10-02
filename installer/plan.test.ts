@@ -196,6 +196,15 @@ describe("summaryLines", () => {
     expect(lines.some((l) => l.startsWith("panel: http://"))).toBe(false)
   })
 
+  test("failed health check under pm2 points at pm2 logs, not journalctl", () => {
+    const lines = summaryLines([
+      mk("panel · install service", "done", "pm2"),
+      mk("panel · health check", "done", "unreachable"),
+    ])
+    expect(lines).toContain("panel health: not answering yet - pm2 logs airlink-panel")
+    expect(lines.some((l) => l.includes("journalctl"))).toBe(false)
+  })
+
   test("daemon installed: env defaults, start command, register node", () => {
     saved = { AIRLINK_DAEMON_DIR: "/srv/daemon" }
     process.env.AIRLINK_DAEMON_DIR = "/srv/daemon"

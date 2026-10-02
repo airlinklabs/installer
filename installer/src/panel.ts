@@ -13,7 +13,7 @@ import { pushLog } from "./log"
 import { downloadAsset, fetchLatestRelease, stageAndSwap, type ReleaseInfo } from "./release"
 import { haveCmd, npmPriv, privCmd, run } from "./run"
 import { installService, removeService } from "./service"
-import { randomHex } from "./sys"
+import { randomHex, sys } from "./sys"
 
 const panelDir = () => process.env.AIRLINK_PANEL_DIR || "/var/www/panel"
 
@@ -118,11 +118,13 @@ export function panelInstallSteps(cfg: Cfg): Step[] {
       name: "panel · set permissions",
       state: "pending",
       run: async () => {
-        if ((await run(privCmd(["chown", "-R", "www-data:www-data", dir]))) !== 0) {
-          throw new Error(`failed to chown ${dir} to www-data - check permissions`)
+        // macOS has no www-data; services run as root there, so root:wheel
+        const owner = sys.family === "darwin" ? "root:wheel" : "www-data:www-data"
+        if ((await run(privCmd(["chown", "-R", owner, dir]))) !== 0) {
+          throw new Error(`failed to chown ${dir} to ${owner} - check permissions`)
         }
         if ((await run(privCmd(["chmod", "-R", "755", dir]))) !== 0) throw new Error(`failed to chmod ${dir}`)
-        return { note: "www-data" }
+        return { note: sys.family === "darwin" ? "root:wheel" : "www-data" }
       },
     },
     {
