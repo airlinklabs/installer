@@ -5,7 +5,7 @@ describe("parseArgs", () => {
   test("defaults", () => {
     const a = parseArgs([])
     expect(a.action).toBeNull()
-    expect(a.service).toBe("systemd")
+    expect(a.service).toBe(process.platform === "darwin" ? "pm2" : "systemd")
     expect(a.serviceGiven).toBe(false)
     expect(a.yes).toBe(false)
     expect(a.plain).toBe(false)
@@ -27,18 +27,37 @@ describe("parseArgs", () => {
 
   test("duplicates: last wins", () => {
     expect(parseArgs(["--install-panel", "--install-daemon"]).action).toBe("install-daemon")
-    expect(parseArgs(["--service", "pm2", "--service", "systemd"]).service).toBe("systemd")
+    // pm2 last so the sequence is valid on every platform (macOS rejects systemd)
+    expect(parseArgs(["--service", "systemd", "--service", "pm2"]).service).toBe("pm2")
   })
 
   test("--service both forms sets serviceGiven", () => {
     const spaced = parseArgs(["--service", "pm2"])
     expect(spaced.service).toBe("pm2")
     expect(spaced.serviceGiven).toBe(true)
-    const eq = parseArgs(["--service=systemd", "--install-panel"])
-    expect(eq.service).toBe("systemd")
-    expect(eq.serviceGiven).toBe(true)
+    if (process.platform === "darwin") {
+      expect(() => parseArgs(["--service=systemd"])).toThrow(UsageError)
+    } else {
+      const eq = parseArgs(["--service=systemd", "--install-panel"])
+      expect(eq.service).toBe("systemd")
+      expect(eq.serviceGiven).toBe(true)
+    }
     // default stays when not given
     expect(parseArgs(["--install-panel"]).serviceGiven).toBe(false)
+  })
+
+  test("macOS rules: pm2 default, explicit systemd rejected", () => {
+    const orig = Object.getOwnPropertyDescriptor(process, "platform")!
+    Object.defineProperty(process, "platform", { value: "darwin" })
+    try {
+      expect(parseArgs([]).service).toBe("pm2")
+      expect(() => parseArgs(["--service", "systemd"])).toThrow(UsageError)
+      expect(() => parseArgs(["--service=systemd"])).toThrow(UsageError)
+      expect(parseArgs(["--service", "pm2"]).service).toBe("pm2")
+      expect(parseArgs(["--install-panel"]).service).toBe("pm2")
+    } finally {
+      Object.defineProperty(process, "platform", orig)
+    }
   })
 
   test("invalid --service throws UsageError", () => {

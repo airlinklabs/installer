@@ -26,9 +26,10 @@ const ACTIONS: Record<string, AppAction> = {
 }
 
 export function parseArgs(argv: string[]): Args {
+  const darwin = process.platform === "darwin"
   const a: Args = {
     action: null,
-    service: "systemd",
+    service: darwin ? "pm2" : "systemd",
     serviceGiven: false,
     yes: false,
     plain: false,
@@ -77,6 +78,11 @@ export function parseArgs(argv: string[]): Args {
         throw new UsageError(`unknown flag: ${raw}`)
     }
   }
+  // macOS has no systemd: the default is pm2 and an explicit request would
+  // otherwise fail deep inside the install (unit dir + systemctl missing)
+  if (darwin && a.serviceGiven && a.service === "systemd") {
+    throw new UsageError("--service systemd is not available on macOS (no systemd) - use --service pm2")
+  }
   return a
 }
 
@@ -118,7 +124,8 @@ flags:
   --uninstall-panel         remove the panel service and files
   --uninstall-daemon        remove the daemon service and files
   --uninstall-all           remove both apps (never node/docker/pm2)
-  --service systemd|pm2     service manager for installs (default: systemd; skips the service screen)
+  --service systemd|pm2     service manager for installs (default: systemd,
+                            pm2 on macOS; skips the service screen)
   --yes                     skip the confirm screens; with an action flag this
                             is the fully scripted path (no TUI, exits on its own)
   --no-color                plain output, no TTY needed (pipes / CI)

@@ -1,8 +1,20 @@
 name: Build installer binaries
 
 # Compiles installer/installer.ts into single-file binaries with `bun build --compile`
-# (one per platform/arch, glibc) and publishes them on the rolling `latest-build` release.
-# installer.sh downloads exactly one of these assets and runs it.
+# (linux x64/arm64 + macOS x64/arm64, each on its native runner so the matching
+# @opentui/core native library gets embedded), then packs each with UPX so the
+# release asset downloads at ~27 MB instead of ~97 MB.
+#
+# UPX-packed bun binaries need BUN_FEATURE_FLAG_DISABLE_STANDALONE_MADVISE=1 set at
+# process start or bun's MADV_DONTNEED hint zero-fills the embedded source text
+# (oven-sh/bun#42515). The binary handles that itself - see installer/src/flags.ts -
+# so the smoke test below exercises the real shipped artifact, re-exec included.
+#
+# Fallback: if UPX refuses a target or the packed binary fails its smoke test, the
+# raw binary ships gzip'd as `<name>.gz` (installer.sh tries the plain asset first
+# and falls back to `.gz`). The final artifact is checksummed after packing, and
+# publish keeps `latest-build` in sync by pruning assets this run did not produce.
+# Not a prerelease: this repo's only releases are the rolling build and version tags.
 
 on:
   push:
@@ -26,11 +38,25 @@ jobs:
       matrix:
         include:
           # native runners: each target arch needs its @opentui/core-<arch>
-          # native package on disk so bun embeds the matching .so
+          # native package on disk so bun embeds the matching .so/.dylib
           - runner: ubuntu-24.04
+            os: linux
             arch: x64
+            target: bun-linux-x64
+            upx_arch: amd64
           - runner: ubuntu-24.04-arm
+            os: linux
             arch: arm64
+            target: bun-linux-arm64
+            upx_arch: arm64
+          - runner: macos-15
+            os: darwin
+            arch: arm64
+            target: bun-darwin-arm64
+          - runner: macos-15-intel
+            os: darwin
+            arch: x64
+            target: bun-darwin-x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +69,10 @@ jobs:
         working-directory: installer
         run: bun install --frozen-lockfile
 
+      # unit tests run once on linux (they are platform-aware and assert the darwin
+      # rules from there too) - tsc is platform-independent
       - name: Typecheck + unit tests
+        if: matrix.os == 'linux'
         working-directory: installer
         run: |
           bunx tsc --noEmit
@@ -52,29 +81,110 @@ jobs:
       - name: Compile binary
         working-directory: installer
         env:
+          TARGET_OS: ${{ matrix.os }}
           TARGET_ARCH: ${{ matrix.arch }}
+          BUN_TARGET: ${{ matrix.target }}
         run: |
           mkdir -p ../dist
-          name="airlink-installer-linux-${TARGET_ARCH}"
-          bun build --compile --minify --target="bun-linux-${TARGET_ARCH}" installer.ts \
+          name="airlink-installer-${TARGET_OS}-${TARGET_ARCH}"
+          bun build --compile --minify --target="${BUN_TARGET}" installer.ts \
             --outfile "../dist/${name}"
-          (cd ../dist && sha256sum "${name}" > "${name}.sha256")
           ls -la ../dist
 
-      - name: Smoke test the native binary
+      - name: Install UPX (linux, pinned)
+        if: matrix.os == 'linux'
+        env:
+          UPX_ARCH: ${{ matrix.upx_arch }}
         run: |
-          # --help must work without a TTY and without root, in the compiled binary;
-          # --demo runs the full plan with every step faked (no root, no changes)
-          bin="./dist/airlink-installer-linux-${{ matrix.arch }}"
-          "$bin" --help > /tmp/help.txt
-          head -5 /tmp/help.txt
-          "$bin" --no-color --demo --install-panel > /tmp/demo.txt
-          tail -3 /tmp/demo.txt
-          grep -q "demo" /tmp/demo.txt
+          # no upx package on the runners; pin 5.2.1 for reproducible packing
+          curl -fsSL -o /tmp/upx.tar.xz \
+            "https://github.com/upx/upx/releases/download/v5.2.1/upx-5.2.1-${UPX_ARCH}_linux.tar.xz"
+          tar -xJf /tmp/upx.tar.xz -C /tmp
+          echo "/tmp/upx-5.2.1-${UPX_ARCH}_linux" >> "$GITHUB_PATH"
+
+      - name: Install UPX (macOS)
+        if: matrix.os == 'darwin'
+        # tolerant on purpose: no brew upx -> this target just ships .gz below
+        run: |
+          if ! HOMEBREW_NO_AUTO_UPDATE=1 brew install upx; then
+            echo "::warning::brew install upx failed - this target will ship a .gz fallback"
+          fi
+
+      - name: Pack, sign, smoke test, checksum
+        env:
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          name="airlink-installer-${TARGET_OS}-${TARGET_ARCH}"
+          bin="dist/${name}"
+          asset="${name}"
+          log=/tmp/upx.log
+
+          # prove the artifact runs without TTY or root: --help parses flags, and
+          # --demo executes the whole plan faked (broad coverage for lazy parses,
+          # i.e. for the UPX re-exec + source-page flag path)
+          smoke() {
+            "$1" --help > /tmp/smoke-help.txt &&
+              grep -q "Airlink installer" /tmp/smoke-help.txt &&
+              "$1" --no-color --demo --install-panel > /tmp/smoke-demo.txt &&
+              grep -q "demo" /tmp/smoke-demo.txt
+          }
+
+          try_pack() {
+            rm -f "$bin.packed"
+            upx "$@" "$bin" -o "$bin.packed" >> "$log" 2>&1
+          }
+          : > "$log"
+
+          # pack to the side, keep the raw original until the packed copy passes -
+          # lzma first (smallest), NRV second in case a format lacks lzma, and on
+          # macOS a --force-macos retry since UPX refuses mach-o unless asked
+          packed=0
+          if try_pack --lzma -9 || try_pack -9 \
+              || try_pack --force-macos --lzma -9 || try_pack --force-macos -9; then
+            packed=1
+          else
+            tail -5 "$log" || true
+            echo "::warning::${name}: UPX refused to pack - shipping a .gz fallback"
+          fi
+
+          if [ "$packed" -eq 1 ]; then
+            # ad-hoc sign the packed file; --force because bun already signed the
+            # raw output and codesign refuses to replace a signature without it
+            if [ "$TARGET_OS" = "darwin" ]; then codesign --force -s - "$bin.packed"; fi
+            if smoke "$bin.packed"; then
+              mv "$bin.packed" "$bin"
+            else
+              echo "::warning::${name}: packed binary failed its smoke test - shipping a .gz fallback"
+              rm -f "$bin.packed"
+              packed=0
+            fi
+          fi
+
+          if [ "$packed" -eq 0 ]; then
+            # raw path: sign (darwin), prove the raw binary runs, then gzip it;
+            # the raw file itself is deleted so the plain asset stays the packed one
+            if [ "$TARGET_OS" = "darwin" ]; then codesign --force -s - "$bin"; fi
+            smoke "$bin"
+            gzip -9 -n -c "$bin" > "$bin.gz"
+            rm -f "$bin"
+            bin="$bin.gz"
+            asset="${name}.gz"
+          fi
+
+          # checksum the exact bytes that will be uploaded (sidecar over the
+          # download, verified by installer.sh before decompressing)
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "$asset" > "$asset.sha256")
+          else
+            (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+          fi
+          ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: airlink-installer-linux-${{ matrix.arch }}
+          name: airlink-installer-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
@@ -94,10 +204,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # a fixed-tag prerelease: stable URL for installer.sh, and marked
-          # prerelease so it never hijacks releases/latest for future version tags
+          set -euo pipefail
+          # stable URL for installer.sh; --latest=false (not --prerelease) keeps it
+          # out of "latest" without making it a prerelease
           gh release view latest-build --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create latest-build --repo "$GITHUB_REPOSITORY" \
-                 --prerelease --title "latest build (rolling)" \
-                 --notes "Rolling binaries built from main. installer.sh downloads from here. Not a versioned release."
+                 --latest=false --title "latest build (rolling)" \
+                 --notes "Rolling binaries built from main (~27 MB UPX-packed; .gz fallback for targets UPX can't pack). installer.sh downloads from here. Not a versioned release."
           gh release upload latest-build dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          # a target can flip between the packed and .gz asset across bun/UPX
+          # changes - delete anything this run did not produce
+          for a in $(gh release view latest-build --repo "$GITHUB_REPOSITORY" \
+                       --json assets --jq '.assets[].name'); do
+            [ -f "dist/$a" ] || \
+              gh release delete-asset latest-build "$a" --yes --repo "$GITHUB_REPOSITORY"
+          done

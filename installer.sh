@@ -4,7 +4,11 @@
 # Downloads the prebuilt airlink-installer binary for this platform from the
 # rolling `latest-build` release and runs it (as root for real actions).
 # The binary is a self-contained OpenTUI installer built by CI with
-# `bun build --compile` - no git, no bun, no source checkout is needed.
+# `bun build --compile` and packed with UPX (~27 MB; when a packer target
+# refuses, CI ships a `.gz` asset and this script decompresses it) - no git,
+# no bun, no source checkout is needed.
+#
+# Platforms: linux-x64 / linux-arm64 (glibc) and darwin-x64 / darwin-arm64.
 #
 # Usage:
 #   bash <(curl -fsSL https://airlinklabs.xyz/install)  # fresh machine
@@ -41,18 +45,38 @@ for a in "$@"; do
 done
 
 # --- 1. platform -> asset name ----------------------------------------------
-# linux-x64 / linux-arm64 on glibc; musl (Alpine) is refused above.
+# linux-x64 / linux-arm64 on glibc (musl refused below) and darwin-x64 /
+# darwin-arm64 on macOS. CI packs the asset with UPX so it downloads small and
+# runs as-is; targets the packer refuses ship as `${ASSET}.gz` (handled below).
 detect_platform() {
-    [ "$(uname -s)" = "Linux" ] || die "unsupported OS: $(uname -s) - this installer targets Linux (x64/arm64, glibc)"
+    os="$(uname -s)"
+    case "$os" in
+        Linux)
+            if ldd --version 2>&1 | grep -qi musl; then
+                die "musl/Alpine systems are not supported - this installer manages services with systemd (Debian/Ubuntu, RHEL/Fedora, Arch, openSUSE)"
+            fi
+            ;;
+        Darwin) : ;;
+        *) die "unsupported OS: $os - supported: Linux (x64/arm64, glibc) and macOS (x64/arm64)" ;;
+    esac
     case "$(uname -m)" in
         x86_64|amd64)  arch=x64 ;;
         aarch64|arm64) arch=arm64 ;;
         *) die "unsupported architecture: $(uname -m) - supported: x86_64, aarch64" ;;
     esac
-    if ldd --version 2>&1 | grep -qi musl; then
-        die "musl/Alpine systems are not supported - this installer manages services with systemd (Debian/Ubuntu, RHEL/Fedora, Arch, openSUSE)"
+    os_lc="$(printf '%s' "$os" | tr '[:upper:]' '[:lower:]')"  # linux | darwin
+    ASSET="${SELF_NAME}-${os_lc}-${arch}"
+}
+
+# fetch <url> <dest> - silent, retries; rc != 0 when the asset is missing
+fetch_url() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 --connect-timeout 10 -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$2" "$1"
+    else
+        die "curl or wget is required to download the installer"
     fi
-    ASSET="${SELF_NAME}-linux-${arch}"
 }
 
 # --- 2. TTY guard ------------------------------------------------------------
@@ -103,31 +127,39 @@ fi
 
 # --- 4. download the binary for this platform --------------------------------
 detect_platform
-URL="${DOWNLOAD_BASE}/${ASSET}"
+ASSET_URL="${DOWNLOAD_BASE}/${ASSET}"
 
 WORKDIR="$(mktemp -d /tmp/airlink-installer.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 BIN="${WORKDIR}/${SELF_NAME}"
 
+# the plain asset is the UPX-packed binary; `${ASSET}.gz` is CI's fallback for
+# a target the packer refused (raw bytes). Verify whichever one we fetched.
 say "fetching ${ASSET}"
-if command -v curl >/dev/null 2>&1; then
-    curl -fL --retry 3 --connect-timeout 10 -o "$BIN" "$URL" || die "download failed: $URL
+FETCH_URL="$ASSET_URL"
+FETCHED="$BIN"
+if ! fetch_url "$ASSET_URL" "$BIN"; then
+    FETCH_URL="${ASSET_URL}.gz"
+    FETCHED="${BIN}.gz"
+    say "no plain asset - trying ${ASSET}.gz"
+    fetch_url "$FETCH_URL" "$FETCHED" || die "download failed: $ASSET_URL
 (no binary for this platform, or the release is missing - check github.com/airlinklabs/installer/actions)"
-elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$BIN" "$URL" || die "download failed: $URL"
-else
-    die "curl or wget is required to download the installer"
 fi
-chmod +x "$BIN"
 
 # checksum when CI published one; absence of tool or sidecar is never fatal
-if curl -fsSL --retry 2 -o "${BIN}.sha256" "${URL}.sha256" 2>/dev/null \
+if fetch_url "${FETCH_URL}.sha256" "${FETCHED}.sha256" 2>/dev/null \
         && command -v sha256sum >/dev/null 2>&1; then
-    want="$(cut -d' ' -f1 "${BIN}.sha256")"
-    have="$(sha256sum "$BIN" | cut -d' ' -f1)"
+    want="$(cut -d' ' -f1 "${FETCHED}.sha256")"
+    have="$(sha256sum "$FETCHED" | cut -d' ' -f1)"
     [ "$want" = "$have" ] || die "checksum mismatch for ${ASSET} (corrupted download) - re-run this script"
     say "checksum ok"
 fi
+
+if [ "$FETCHED" != "$BIN" ]; then
+    gzip -dc "$FETCHED" > "$BIN" || die "decompressing ${ASSET}.gz failed - gzip is required"
+    rm -f "$FETCHED"
+fi
+chmod +x "$BIN"
 
 # --- 5. run it ---------------------------------------------------------------
 say "starting airlink installer"

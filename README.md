@@ -3,7 +3,7 @@
 ![installer-demo-gif](./docs/demo.gif)
 
 
-One command that installs and uninstalls the Airlink **panel** and **daemon** on Linux — pulling only the latest stable GitHub release zips (`panel.zip` / `daemon.zip`), never git clones of the apps, never prereleases.
+One command that installs and uninstalls the Airlink **panel** and **daemon** on Linux and macOS — pulling only the latest stable GitHub release zips (`panel.zip` / `daemon.zip`), never git clones of the apps, never prereleases.
 
 ## Install
 
@@ -38,13 +38,13 @@ curl -fsSL https://raw.githubusercontent.com/airlinklabs/installer/main/installe
 | **Uninstall everything** | Daemon + panel uninstall in one run; never removes Node, Docker, or pm2 |
 
 - **Latest-release resolution:** `api.github.com/.../releases/latest` → `panel.zip` / `daemon.zip`. Prereleases and drafts are invisible; the sha256 digest is verified when the API provides one.
-- **Service choice:** `systemd` (default) or `pm2` — chosen in the TUI, then a confirm screen shows exactly what will be written before anything runs.
+- **Service choice:** `systemd` (default on Linux) or `pm2` — chosen in the TUI, then a confirm screen shows exactly what will be written before anything runs. On macOS `pm2` is the only option (services persist via pm2's launchd agent) and the service screen is skipped.
 - **Daemon `.env`** is written verbatim from `example.env` — you edit it before starting.
 
 > **After install**
 >
 > - **Panel:** open `http://<ip>:3000` and register the first account — the first signup becomes the admin.
-> - **Daemon:** edit `/etc/daemon/.env` (`remote`, `key`), then run `systemctl enable --now airlink-daemon`, then register the node in the panel under **Admin → Nodes**.
+> - **Daemon:** edit `/etc/daemon/.env` (`remote`, `key`), then start it — `systemctl enable --now airlink-daemon` on Linux, `pm2 start airlink-daemon` on macOS — then register the node in the panel under **Admin → Nodes**.
 
 ## Flags
 
@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/airlinklabs/installer/main/installe
 | `--uninstall-panel` | Remove the panel service + files |
 | `--uninstall-daemon` | Remove the daemon service + files |
 | `--uninstall-all` | Remove both |
-| `--service systemd\|pm2` | Service manager for installs (default: `systemd`) |
+| `--service systemd\|pm2` | Service manager for installs (default: `systemd` on Linux, `pm2` on macOS) |
 | `--yes` | Skip the confirm screens (required for uninstalls without a TTY); **with an action flag this is the scripted path** — plain logs, no TUI, exits on its own |
 | `--no-color` | Plain logs explicitly (no TTY needed; scriptable/CI) |
 | `--demo` | Every step faked — UI preview, no system changes |
@@ -78,7 +78,7 @@ No action flag + TTY → interactive welcome menu. No action flag without a TTY 
 
 ## How distribution works
 
-`installer.sh` is only a bootstrap (~5 KB): it detects your platform (`linux-x64`/`linux-arm64` on glibc; musl/Alpine is refused with an explanation), downloads the matching prebuilt `airlink-installer-*` binary (~100 MB, self-contained: bun runtime + OpenTUI + the installer) from the rolling [`latest-build`](https://github.com/airlinklabs/installer/releases/tag/latest-build) release, verifies its sha256 when present, and executes it **as root** (one interactive `sudo -v`). No git, no bun, no source checkout ever touches your machine. The binaries are built by `.github/workflows/build.yml` with `bun build --compile` on every push to `main`.
+`installer.sh` is only a bootstrap (~6 KB): it detects your platform (`linux-x64`/`linux-arm64` on glibc, `darwin-x64`/`darwin-arm64` on macOS; musl/Alpine is refused with an explanation), downloads the matching prebuilt `airlink-installer-*` binary (~27 MB, UPX-packed; a `.gz` fallback asset ships for any target the packer can't handle, and the bootstrap falls back to it automatically) from the rolling [`latest-build`](https://github.com/airlinklabs/installer/releases/tag/latest-build) release, verifies its sha256 when present, and executes it **as root** (one interactive `sudo -v`). No git, no bun, no source checkout ever touches your machine. The binaries are built by `.github/workflows/build.yml` with `bun build --compile` on every push to `main`.
 
 ## Environment overrides
 
@@ -96,12 +96,13 @@ No action flag + TTY → interactive welcome menu. No action flag without a TTY 
 
 ## Requirements
 
-- Linux on x86_64 or aarch64 with glibc (Debian/Ubuntu, RHEL-ish, Arch, SUSE) — musl/Alpine is not supported
+- Linux x86_64/aarch64 with glibc (Debian/Ubuntu, RHEL-ish, Arch, SUSE) — musl/Alpine is not supported — or macOS (arm64 or Intel)
 - `curl` or `wget` to fetch the binary; sudo (or root) for install/uninstall actions
+- macOS extras: Xcode Command Line Tools (`xcode-select -p`; installed by `xcode-select --install`) and Homebrew (for Docker, when the daemon needs it); services run under pm2
 - A TTY — or `--no-color` for pipes/CI
 - Network (GitHub Releases API + downloads)
-- Node ≥ 18 — installed automatically if missing
-- Docker — installed automatically for the daemon
+- Node ≥ 18 — installed automatically if missing (apt/dnf/pacman or Homebrew)
+- Docker — installed automatically for the daemon (apt/dnf/pacman or `brew install --cask docker`; Docker Desktop must be running on macOS)
 
 ## Development
 

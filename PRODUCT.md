@@ -14,7 +14,7 @@ bun + TypeScript + @opentui/core for the TUI (pinned by the brief: "same technol
 
 ## Users
 
-Self-hosters and server admins deploying Airlink (panel + daemon) on a Linux machine, over ssh or locally, who want one command instead of following README steps by hand. Secondary: AirlinkLabs contributors running the installer from a local checkout.
+Self-hosters and server admins deploying Airlink (panel + daemon) on a Linux or macOS machine, over ssh or locally, who want one command instead of following README steps by hand. Secondary: AirlinkLabs contributors running the installer from a local checkout.
 
 ## Product Purpose
 
@@ -22,11 +22,12 @@ One command (`curl -fsSL https://airlinklabs.xyz/install | bash`) installs, upda
 
 ## Positioning
 
-Release-zip based, not git-clone based: the installer never clones the app repos; it always pulls the latest non-prerelease release asset (`panel.zip` / `daemon.zip`) and extracts it into the canonical directories. Distribution of the installer itself is binary-based too: a TTY-aware bash bootstrap downloads the prebuilt `airlink-installer-linux-<arch>` binary (built by CI from this repo, checksummed) matching the user's platform and executes it as root — no git, no bun, no source checkout on the target machine.
+Release-zip based, not git-clone based: the installer never clones the app repos; it always pulls the latest non-prerelease release asset (`panel.zip` / `daemon.zip`) and extracts it into the canonical directories. Distribution of the installer itself is binary-based too: a TTY-aware bash bootstrap downloads the prebuilt `airlink-installer-<os>-<arch>` binary (built by CI from this repo, UPX-packed to ~27 MB with a `.gz` fallback asset, checksummed) matching the user's platform and executes it as root — no git, no bun, no source checkout on the target machine.
 
 ## Operating Context
 
 - Linux with sudo (Debian/Ubuntu, RHEL-ish, Arch, SUSE families); systemd is the default service manager, pm2 an in-TUI alternative.
+- macOS (arm64/Intel) with sudo and the Xcode Command Line Tools: pm2 is the only service manager (launchd via `pm2 startup`), packages come from Homebrew, Docker Desktop must be running for the daemon.
 - Node.js >= 18 (bootstrap installs Node 20 via NodeSource/distro packages when missing), npm, unzip, curl; build toolchain (python3, make, g++) for the daemon's native `libs/` addon; Docker required by the daemon.
 - GitHub: Releases API (`/releases/latest`, excludes drafts and prereleases) for tag + asset resolution, then direct asset download.
 - Canonical targets: panel -> `/var/www/panel` (owner www-data), daemon -> `/etc/daemon` (owner www-data).
@@ -34,13 +35,13 @@ Release-zip based, not git-clone based: the installer never clones the app repos
 
 ## Capabilities and Constraints
 
-- Main menu: install both, install panel, install daemon, uninstall panel, uninstall daemon, uninstall everything, exit. A service-manager choice (systemd | pm2) is presented during install.
+- Main menu: install both, install panel, install daemon, uninstall panel, uninstall daemon, uninstall everything, exit. A service-manager choice (systemd | pm2) is presented during install — pm2 only on macOS, where the screen is skipped for scripted runs.
 - Always latest stable release only: `/releases/latest` API (404/draft/prerelease handled with a clear error), never a pinned or prerelease tag.
 - Zips contain one root dir (`panel-<sha>/`, `daemon-<sha>/`); extraction strips it into the target dir.
 - Panel install: deps -> download/extract -> chown www-data + chmod 755 -> `.env` from `example.env` with a generated `SESSION_SECRET` (assumption; everything else kept from example) -> `npm install` (dev deps kept: `tsc` is needed by `npm run build`) -> `prisma db push` + `prisma generate` -> `npm run build` -> service -> health check.
 - Daemon install: deps (incl. build toolchain + Docker) -> download/extract -> chown www-data + chmod 755 -> `.env` written verbatim from `example.env` (user's explicit decision: they edit it manually before starting) -> `npm install` -> `npm run build` -> build `libs/` native addon (`npm install` + node-gyp rebuild) -> service installed but left stopped/disabled (honors "edits it manually before starting"); the completion summary prints the exact start command.
 - No admin-account creation (user's explicit decision): the panel's first-user registration flow in the browser creates the admin.
-- Service management: chosen in the TUI (systemd | pm2). systemd writes `/etc/systemd/system/airlink-{panel,daemon}.service`; panel is enabled and started, daemon stays stopped until the user edits its `.env`. pm2 path installs pm2, starts the panel (`dist/app.js`, app dir as cwd), leaves the daemon stopped, `pm2 save`; `pm2 startup` is attempted tolerantly.
+- Service management: chosen in the TUI (systemd | pm2; pm2 only on macOS). systemd writes `/etc/systemd/system/airlink-{panel,daemon}.service`; panel is enabled and started, daemon stays stopped until the user edits its `.env`. pm2 path installs pm2, starts the panel (`dist/app.js`, app dir as cwd), leaves the daemon stopped, `pm2 save`; `pm2 startup` is attempted tolerantly (launchd agent on macOS, `startup systemd -u root` on Linux).
 - Reinstall/upgrade (running an install action when the app dir already exists): back up the existing `.env` to `<app>.env.bak-<timestamp>` before replacing files, then restore it; never silently destroy user config.
 - Every install stops at a confirm review before anything is written — chosen service manager, unit path + target dir per app, `Cancel` preselected — so the welcome hint "install makes changes only after you confirm" is literally true; `--yes` skips it.
 - Uninstall: confirm first, then stop/disable the service (systemd unit or pm2 process), remove the unit / delete the pm2 app, remove the app directory. It does not remove Node, Docker, or pm2.
@@ -77,6 +78,6 @@ Must work over ssh in minimal terminals: plain mode engages automatically for no
 ## Assumptions (inferred, labeled per init)
 
 - The bootstrap is served at `https://airlinklabs.xyz/install` — the content of `installer.sh` is pasted into the airlinklabs.xyz site repo, while this repo keeps the file as source of truth (overridable via `AIRLINK_INSTALLER_URL` / raw.githubusercontent fallback).
-- Distribution targets a rolling prerelease release `latest-build` on airlinklabs/installer (assets `airlink-installer-linux-{x64,arm64}` + `.sha256` sidecars), so the bootstrap URL is stable and `releases/latest` stays free for future version tags.
+- Distribution targets a rolling ordinary release `latest-build` on airlinklabs/installer — created with `--latest=false` (never `--prerelease`), assets `airlink-installer-<os>-<arch>` for linux/darwin × x64/arm64 (UPX-packed plain form, `.gz` form when the packer can't pack a target) + `.sha256` sidecars — so the bootstrap URL is stable and `releases/latest` stays free for future version tags.
 - `SESSION_SECRET` is generated rather than left as `change_me` (security floor; not a product feature).
 - Node bootstrap targets Node 20 (matches the old installer; READMEs require >= 18).
