@@ -1,6 +1,7 @@
 # Airlink installer
 
-<img width="1919" height="1160" alt="Screenshot_20261002_114154_Termux" src="https://github.com/user-attachments/assets/026d9f95-4174-4bbd-ad7e-176206ab3293" />
+![installer-demo-gif](./docs/demo.gif)
+
 
 One command that installs and uninstalls the Airlink **panel** and **daemon** on Linux — pulling only the latest stable GitHub release zips (`panel.zip` / `daemon.zip`), never git clones of the apps, never prereleases.
 
