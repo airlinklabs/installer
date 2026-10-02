@@ -138,9 +138,11 @@ jobs:
           : > "$log"
 
           # pack to the side, keep the raw original until the packed copy passes -
-          # lzma first (smallest), NRV second in case a format lacks lzma
+          # lzma first (smallest), NRV second in case a format lacks lzma, and on
+          # macOS a --force-macos retry since UPX refuses mach-o unless asked
           packed=0
-          if try_pack --lzma -9 || try_pack -9; then
+          if try_pack --lzma -9 || try_pack -9 \
+              || try_pack --force-macos --lzma -9 || try_pack --force-macos -9; then
             packed=1
           else
             tail -5 "$log" || true
@@ -148,8 +150,9 @@ jobs:
           fi
 
           if [ "$packed" -eq 1 ]; then
-            # mach-o needs at least an ad-hoc signature to execute on arm64 macOS
-            if [ "$TARGET_OS" = "darwin" ]; then codesign -s - "$bin.packed"; fi
+            # ad-hoc sign the packed file; --force because bun already signed the
+            # raw output and codesign refuses to replace a signature without it
+            if [ "$TARGET_OS" = "darwin" ]; then codesign --force -s - "$bin.packed"; fi
             if smoke "$bin.packed"; then
               mv "$bin.packed" "$bin"
             else
@@ -162,7 +165,7 @@ jobs:
           if [ "$packed" -eq 0 ]; then
             # raw path: sign (darwin), prove the raw binary runs, then gzip it;
             # the raw file itself is deleted so the plain asset stays the packed one
-            if [ "$TARGET_OS" = "darwin" ]; then codesign -s - "$bin"; fi
+            if [ "$TARGET_OS" = "darwin" ]; then codesign --force -s - "$bin"; fi
             smoke "$bin"
             gzip -9 -n -c "$bin" > "$bin.gz"
             rm -f "$bin"
