@@ -7,10 +7,10 @@
 # `bun build --compile` - no git, no bun, no source checkout is needed.
 #
 # Usage:
-#   bash <(curl -fsSL <pages>/installer.sh)        # fresh machine
-#   curl -fsSL <pages>/installer.sh | bash         # fresh machine (piped)
-#   curl -fsSL <pages>/installer.sh | bash -s -- --install-both
-#   curl -fsSL <pages>/installer.sh | bash -s -- --install-both --yes
+#   bash <(curl -fsSL https://airlinklabs.xyz/install)  # fresh machine
+#   curl -fsSL https://airlinklabs.xyz/install | bash   # fresh machine (piped)
+#   curl -fsSL https://airlinklabs.xyz/install | bash -s -- --install-both
+#   curl -fsSL https://airlinklabs.xyz/install | bash -s -- --install-both --yes
 #                                     # scripted: plain logs, no TTY, exit code = result
 #   ./installer.sh --help        # usage; no TTY, no root needed
 #   ./installer.sh --no-color    # plain logs explicitly (pipes / CI); actions still need root

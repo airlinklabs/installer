@@ -44,7 +44,7 @@ jobs:
           <main>
             <h1>Airlink installer</h1>
             <p>Installs the Airlink panel &amp; daemon from the latest stable release zips.</p>
-            <pre><code>curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash</code></pre>
+            <pre><code>curl -fsSL https://airlinklabs.xyz/install | bash</code></pre>
             <p><a href="https://github.com/airlinklabs/installer">github.com/airlinklabs/installer</a></p>
           </main>
           </body>

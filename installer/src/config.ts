@@ -108,7 +108,7 @@ export function chooseMode(
 export const USAGE = `Airlink installer - install and uninstall the panel and daemon from release zips
 
 usage:
-  installer.sh [flags]        curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash -s -- [flags]
+  installer.sh [flags]        curl -fsSL https://airlinklabs.xyz/install | bash -s -- [flags]
   bun installer.ts [flags]    (dev checkout; a TTY opens the menu, anything else runs plain)
 
 flags:

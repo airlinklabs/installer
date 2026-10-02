@@ -4,10 +4,10 @@ One command that installs and uninstalls the Airlink **panel** and **daemon** on
 
 ## Install
 
-Primary (GitHub Pages):
+Primary:
 
 ```sh
-curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash
+curl -fsSL https://airlinklabs.xyz/install | bash
 ```
 
 Fallback (raw GitHub):
@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/airlinklabs/installer/main/installe
 With flags — everything after `--` is forwarded straight to the installer:
 
 ```sh
-curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash -s -- --install-both --service systemd
+curl -fsSL https://airlinklabs.xyz/install | bash -s -- --install-both --service systemd
 curl -fsSL https://raw.githubusercontent.com/airlinklabs/installer/main/installer.sh | bash -s -- --install-daemon --yes
 ```
 
@@ -63,10 +63,10 @@ Mode selection: TTY + interactive intent → TUI menu. No usable TTY (pipes, CI,
 
 ```sh
 # interactive
-curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash
+curl -fsSL https://airlinklabs.xyz/install | bash
 
 # scripted / CI: no TTY needed, exit code is the result
-curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash -s -- --install-both --yes
+curl -fsSL https://airlinklabs.xyz/install | bash -s -- --install-both --yes
 ./installer.sh --uninstall-all --yes            # rc 0 = gone, rc != 0 = failed
 ./installer.sh --demo --install-both            # headless UI preview
 ```
@@ -114,9 +114,9 @@ bash e2e.sh               # hermetic smoke tests
 bun build --compile --minify --target=bun-linux-x64 installer.ts --outfile dist/airlink-installer-linux-x64
 ```
 
-## Enabling GitHub Pages
+## Serving the bootstrap
 
-One-time, per [repo Settings → Pages](https://github.com/airlinklabs/installer/settings/pages): **Source: GitHub Actions**. `.github/workflows/pages.yml` stages `installer.sh` + a landing page and deploys them to `https://airlinklabs.github.io/installer/`. `.github/workflows/build.yml` publishes the binaries to the `latest-build` release automatically (needs `contents: write`, granted in the workflow).
+The primary entry point is `https://airlinklabs.xyz/install`: the content of this repo's `installer.sh` is pasted into the airlinklabs.xyz site repo and served at `/install` — this repo stays the source of truth, and the raw GitHub URL above always mirrors it. Optionally, `.github/workflows/pages.yml` stages `installer.sh` + a landing page to GitHub Pages as a second mirror — set [repo Settings → Pages](https://github.com/airlinklabs/installer/settings/pages) to **Source: GitHub Actions** to enable it. `.github/workflows/build.yml` publishes the binaries to the `latest-build` release automatically (needs `contents: write`, granted in the workflow).
 
 ## License
 

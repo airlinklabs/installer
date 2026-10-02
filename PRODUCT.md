@@ -10,7 +10,7 @@ terminal
 
 ## Stack
 
-bun + TypeScript + @opentui/core for the TUI (pinned by the brief: "same technology as Miserable_Xfce"); a bash bootstrap script `installer.sh` as the curl|bash entry point; GitHub Actions (`bun build --compile`) ships the installer as prebuilt single-file binaries per platform/arch, which the bootstrap downloads and runs as root; installer.sh + landing page hosted on GitHub Pages. Recorded, not re-offered: the user pinned the stack in the original request.
+bun + TypeScript + @opentui/core for the TUI (pinned by the brief: "same technology as Miserable_Xfce"); a bash bootstrap script `installer.sh` as the curl|bash entry point; GitHub Actions (`bun build --compile`) ships the installer as prebuilt single-file binaries per platform/arch, which the bootstrap downloads and runs as root; installer.sh served at `https://airlinklabs.xyz/install` (content pasted into the site repo; this repo keeps the file as source of truth, GitHub Pages as an optional mirror). Recorded, not re-offered: the user pinned the stack in the original request.
 
 ## Users
 
@@ -18,7 +18,7 @@ Self-hosters and server admins deploying Airlink (panel + daemon) on a Linux mac
 
 ## Product Purpose
 
-One command (`curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash`) installs, updates, and uninstalls the two Airlink applications — the panel and the daemon — from their GitHub release zips. Success means a working `airlink-panel` / `airlink-daemon` service with zero manual clone/npm/build/service steps, and a safe way to remove them again.
+One command (`curl -fsSL https://airlinklabs.xyz/install | bash`) installs, updates, and uninstalls the two Airlink applications — the panel and the daemon — from their GitHub release zips. Success means a working `airlink-panel` / `airlink-daemon` service with zero manual clone/npm/build/service steps, and a safe way to remove them again.
 
 ## Positioning
 
@@ -76,7 +76,7 @@ Must work over ssh in minimal terminals: plain mode engages automatically for no
 
 ## Assumptions (inferred, labeled per init)
 
-- GitHub Pages will be enabled on airlinklabs/installer serving repo root, so the bootstrap URL is `https://airlinklabs.github.io/installer/installer.sh` (overridable via `AIRLINK_INSTALLER_URL` / raw.githubusercontent fallback).
+- The bootstrap is served at `https://airlinklabs.xyz/install` — the content of `installer.sh` is pasted into the airlinklabs.xyz site repo, while this repo keeps the file as source of truth (overridable via `AIRLINK_INSTALLER_URL` / raw.githubusercontent fallback).
 - Distribution targets a rolling prerelease release `latest-build` on airlinklabs/installer (assets `airlink-installer-linux-{x64,arm64}` + `.sha256` sidecars), so the bootstrap URL is stable and `releases/latest` stays free for future version tags.
 - `SESSION_SECRET` is generated rather than left as `change_me` (security floor; not a product feature).
 - Node bootstrap targets Node 20 (matches the old installer; READMEs require >= 18).
