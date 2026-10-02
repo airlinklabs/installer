@@ -1,0 +1,103 @@
+name: Build installer binaries
+
+# Compiles installer/installer.ts into single-file binaries with `bun build --compile`
+# (one per platform/arch, glibc) and publishes them on the rolling `latest-build` release.
+# installer.sh downloads exactly one of these assets and runs it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "installer/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-binaries
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # native runners: each target arch needs its @opentui/core-<arch>
+          # native package on disk so bun embeds the matching .so
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+
+      - name: Install dependencies
+        working-directory: installer
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck + unit tests
+        working-directory: installer
+        run: |
+          bunx tsc --noEmit
+          bun test
+
+      - name: Compile binary
+        working-directory: installer
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p ../dist
+          name="airlink-installer-linux-${TARGET_ARCH}"
+          bun build --compile --minify --target="bun-linux-${TARGET_ARCH}" installer.ts \
+            --outfile "../dist/${name}"
+          (cd ../dist && sha256sum "${name}" > "${name}.sha256")
+          ls -la ../dist
+
+      - name: Smoke test the native binary
+        run: |
+          # --help must work without a TTY and without root, in the compiled binary;
+          # --demo runs the full plan with every step faked (no root, no changes)
+          bin="./dist/airlink-installer-linux-${{ matrix.arch }}"
+          "$bin" --help > /tmp/help.txt
+          head -5 /tmp/help.txt
+          "$bin" --no-color --demo --install-panel > /tmp/demo.txt
+          tail -3 /tmp/demo.txt
+          grep -q "demo" /tmp/demo.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airlink-installer-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish rolling release (latest-build)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # a fixed-tag prerelease: stable URL for installer.sh, and marked
+          # prerelease so it never hijacks releases/latest for future version tags
+          gh release view latest-build --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create latest-build --repo "$GITHUB_REPOSITORY" \
+                 --prerelease --title "latest build (rolling)" \
+                 --notes "Rolling binaries built from main. installer.sh downloads from here. Not a versioned release."
+          gh release upload latest-build dist/* --repo "$GITHUB_REPOSITORY" --clobber

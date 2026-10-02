@@ -1,0 +1,24 @@
+┌─confirm────────────────────────────────────────────────────────┐
+│                                                                │
+│ this removes services and files:                               │
+│                                                                │
+│ airlink-panel.service  (stop + disable)                        │
+│   unit   /tmp/opencode/units/airlink-panel.service             │
+│   files  /var/www/panel   rm -rf - the database lives inside   │
+│                                                                │
+│ kept: node, docker, pm2                                        │
+│                                                                │
+│  ▶ Cancel                                                      │
+│    back to the menu                                            │
+│    Yes, remove panel                                           │
+│    stops services and deletes files                            │
+│                                                                │
+│                                                                │
+│                                                                │
+│                                                                │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+
+
+
+

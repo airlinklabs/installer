@@ -1,0 +1,24 @@
+  install both complete
+
+
+ ┌─logs───────────────────────────────────────────────────────────────────────┐
+ │                                                                            │
+ │ [daemon · install service] working... item 3/3                             │
+ │ [daemon · install service] ok                                              │
+ │                                                                            │
+ │ latest release: Beta-demo                                                  │
+ │ panel dir: /var/www/panel                                                  │
+ │ panel .env: fresh (SESSION_SECRET generated)                               │
+ │ panel: http://192.168.1.37:3000                                            │
+ │ panel service: systemctl status airlink-panel                              │
+ │ register: open http://192.168.1.37:3000 and sign up - the first signup     │
+ │ becomes the admin                                                          │
+ │ daemon dir: /etc/daemon                                                    │
+ │ daemon .env: example defaults - edit /etc/daemon/.env (remote, key)        │
+ │ start daemon: systemctl enable --now airlink-daemon                        │
+ │ register node: panel -> Admin -> Nodes -> Create, paste the daemon key     │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────────────────────┘
+
+
+  enter/q quit

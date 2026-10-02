@@ -1,0 +1,68 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Stage site
+        run: |
+          mkdir -p _site
+          cp installer.sh _site/
+          cat > _site/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Airlink installer</title>
+          <style>
+            body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+                   background: #1a1b26; color: #c0caf5; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+            main { max-width: 44rem; padding: 2rem; }
+            h1 { color: #7aa2f7; font-weight: 600; letter-spacing: .02em; margin: 0 0 .5rem; }
+            p { line-height: 1.6; }
+            pre { background: #16161e; border: 1px solid #33364d; border-radius: 8px; padding: 1rem;
+                  overflow-x: auto; color: #a9b1d6; }
+            a { color: #7aa2f7; }
+          </style>
+          </head>
+          <body>
+          <main>
+            <h1>Airlink installer</h1>
+            <p>Installs the Airlink panel &amp; daemon from the latest stable release zips.</p>
+            <pre><code>curl -fsSL https://airlinklabs.github.io/installer/installer.sh | bash</code></pre>
+            <p><a href="https://github.com/airlinklabs/installer">github.com/airlinklabs/installer</a></p>
+          </main>
+          </body>
+          </html>
+          EOF
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

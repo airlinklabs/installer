@@ -1,0 +1,23 @@
+{
+  "name": "airlink-installer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenTUI installer for the Airlink panel and daemon (release-zip based)",
+  "scripts": {
+    "start": "bun installer.ts",
+    "demo": "bun installer.ts --demo",
+    "plain": "bun installer.ts --no-color --demo --install-panel",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "e2e": "bash e2e.sh"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.5.12"
+  }
+}

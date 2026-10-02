@@ -1,0 +1,24 @@
+  install both  ·  step 10/22  ·  5.9s
+
+
+ ┌─steps────────────────────────┐ ┌─logs──────────────────────────────────────┐
+ │                              │ │                                           │
+ │ ✓ detect system  ubuntu debi │ │ [panel · set permissions] ok              │
+ │ ✓ runtime deps  node, curl,  │ │ --- panel · npm install ---               │
+ │ ✓ docker  docker ok          │ │ [panel · npm install] working... item 1/3 │
+ │ ✓ panel · resolve latest rel │ │ [panel · npm install] working... item 2/3 │
+ │ ✓ panel · download zip  sha2 │ │ [panel · npm install] working... item 3/3 │
+ │ ✓ panel · extract  fresh ins │ │ [panel · npm install] ok                  │
+ │ ✓ panel · write .env  fresh  │ │ --- panel · database setup ---            │
+ │ ✓ panel · set permissions  w │ │ [panel · database setup] working... item  │
+ │ ✓ panel · npm install        │ │ 1/3                                       │
+ │ ⠏ ▸ panel · database setup   │ │ [panel · database setup] working... item  │
+ │ ○ panel · build              │ │ 2/3                                       │
+ │ ○ panel · install service    │ │ [panel · database setup] working... item  │
+ │ ○ panel · health check       │ │ 3/3                                       │
+ │ ○ daemon · resolve latest re │ │                                           │
+ │                              │ │                                           │
+ └──────────────────────────────┘ └───────────────────────────────────────────┘
+
+
+  running  ·  ctrl+c is ignored until the run finishes
